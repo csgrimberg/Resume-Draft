@@ -10,7 +10,7 @@ import ast
 # -------------------------
 MODEL_PATH = "resume_job_matcher_model.pkl"
 TRAINING_PATH = "training_pairs_debug.csv"
-SKILLS_PATH = "skills (1).txt"
+SKILLS_PATH = "skills.txt"
 
 model = joblib.load(MODEL_PATH)
 training_df = pd.read_csv(TRAINING_PATH)
