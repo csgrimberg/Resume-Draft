@@ -40,12 +40,9 @@ CARD = "#1A1A1A"
 TEXT = "#FFFFFF"
 MUTED = "#B3B3B3"
 BORDER = "#2A2A2A"
-SUCCESS = "#1DB954"
-WARNING = "#FFB020"
-DANGER = "#FF4B4B"
 
 # -------------------------
-# CUSTOM CSS
+# CSS
 # -------------------------
 st.markdown(
     f"""
@@ -75,15 +72,14 @@ st.markdown(
         border-radius: 22px;
         padding: 1.6rem;
         margin-bottom: 1.2rem;
-        box-shadow: 0 0 0 1px rgba(255,45,45,0.05);
     }}
 
-    .info-card {{
+    .info-card, .result-card {{
         background: {CARD};
         border: 1px solid {BORDER};
         border-radius: 18px;
-        padding: 1rem 1.1rem;
-        margin-bottom: 1rem;
+        padding: 1rem 1.15rem;
+        margin-top: 1rem;
     }}
 
     div[data-testid="stFileUploader"] {{
@@ -113,20 +109,6 @@ st.markdown(
     .stButton > button:hover {{
         filter: brightness(1.08);
         color: white;
-    }}
-
-    div[data-testid="stExpander"] {{
-        background: {CARD};
-        border-radius: 14px;
-        border: 1px solid {BORDER};
-        overflow: hidden;
-    }}
-
-    textarea, input {{
-        background-color: {CARD} !important;
-        color: white !important;
-        border: 1px solid {BORDER} !important;
-        border-radius: 10px !important;
     }}
 
     div[data-testid="stProgressBar"] > div > div > div > div {{
@@ -169,14 +151,6 @@ st.markdown(
         border: 1px solid rgba(255, 45, 45, 0.35);
     }}
 
-    .result-card {{
-        background: {CARD};
-        border: 1px solid {BORDER};
-        border-radius: 18px;
-        padding: 1rem 1.15rem;
-        margin-top: 1rem;
-    }}
-
     .small-note {{
         font-size: 0.85rem;
         color: {MUTED};
@@ -187,11 +161,15 @@ st.markdown(
 )
 
 # -------------------------
-# LOAD FILES
+# FILE PATHS
 # -------------------------
 MODEL_PATH = "resume_job_matcher_model.pkl"
 TRAINING_PATH = "training_pairs_debug.csv"
+SKILLS_PATH = "skills.txt"
 
+# -------------------------
+# LOAD MODEL/DATA
+# -------------------------
 @st.cache_resource
 def load_model():
     return joblib.load(MODEL_PATH)
@@ -199,6 +177,16 @@ def load_model():
 @st.cache_data
 def load_training_data():
     return pd.read_csv(TRAINING_PATH)
+
+@st.cache_data
+def load_skills():
+    try:
+        with open(SKILLS_PATH, "r", encoding="utf-8", errors="ignore") as f:
+            raw = f.read().lower()
+        skills = re.split(r"[\n,]+", raw)
+        return sorted(list(set([s.strip() for s in skills if s.strip()])))
+    except FileNotFoundError:
+        return []
 
 model = load_model()
 training_df = load_training_data()
@@ -234,16 +222,31 @@ def predict_match(resume_text, job_text):
     prob = model.predict_proba([combined])[0][1]
     return int(pred), float(prob)
 
-def safe_parse_list(x):
-    if isinstance(x, list):
-        return x
-    if pd.isna(x):
-        return []
-    try:
-        parsed = ast.literal_eval(x)
-        return parsed if isinstance(parsed, list) else []
-    except Exception:
-        return []
+def extract_skills_from_text(text, skills_list):
+    cleaned = f" {clean_text(text)} "
+    found = set()
+
+    for skill in skills_list:
+        skill_clean = skill.strip().lower()
+        if not skill_clean:
+            continue
+
+        pattern = r"(?<!\w)" + re.escape(skill_clean) + r"(?!\w)"
+        if re.search(pattern, cleaned):
+            found.add(skill_clean)
+
+    return sorted(found)
+
+def compare_uploaded_skills(resume_text, job_text):
+    skills_list = load_skills()
+
+    resume_skills = extract_skills_from_text(resume_text, skills_list)
+    job_skills = extract_skills_from_text(job_text, skills_list)
+
+    matched_skills = sorted(set(resume_skills).intersection(set(job_skills)))
+    missing_skills = sorted(set(job_skills) - set(resume_skills))
+
+    return resume_skills, job_skills, matched_skills, missing_skills
 
 def decode_text_bytes(raw):
     for encoding in ["utf-8", "latin-1", "cp1252"]:
@@ -254,78 +257,66 @@ def decode_text_bytes(raw):
     return raw.decode("utf-8", errors="ignore")
 
 def read_txt_file(uploaded_file):
-    raw = uploaded_file.read()
-    return decode_text_bytes(raw)
+    return decode_text_bytes(uploaded_file.read())
 
 def read_pdf_file(uploaded_file):
     if PyPDF2 is None:
-        raise ImportError("PyPDF2 is not installed. Add it to requirements.txt")
+        raise ImportError("PyPDF2 is not installed. Add PyPDF2 to requirements.txt")
 
-    pdf_reader = PyPDF2.PdfReader(io.BytesIO(uploaded_file.read()))
-    pages = []
+    reader = PyPDF2.PdfReader(io.BytesIO(uploaded_file.read()))
+    text = []
 
-    for page in pdf_reader.pages:
+    for page in reader.pages:
         page_text = page.extract_text()
         if page_text:
-            pages.append(page_text)
+            text.append(page_text)
 
-    return "\n".join(pages).strip()
+    return "\n".join(text).strip()
 
 def read_docx_file(uploaded_file):
     if Document is None:
-        raise ImportError("python-docx is not installed. Add it to requirements.txt")
+        raise ImportError("python-docx is not installed. Add python-docx to requirements.txt")
 
     doc = Document(io.BytesIO(uploaded_file.read()))
     paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
     return "\n".join(paragraphs).strip()
 
 def read_uploaded_file(uploaded_file):
-    file_name = uploaded_file.name.lower()
+    name = uploaded_file.name.lower()
 
-    if file_name.endswith(".txt"):
+    if name.endswith(".txt"):
         return read_txt_file(uploaded_file)
-    if file_name.endswith(".pdf"):
+    if name.endswith(".pdf"):
         return read_pdf_file(uploaded_file)
-    if file_name.endswith(".docx"):
+    if name.endswith(".docx"):
         return read_docx_file(uploaded_file)
 
-    raise ValueError("Unsupported file type. Please upload a TXT, PDF, or DOCX file.")
-
-def get_closest_training_example(score):
-    df = training_df.copy()
-    if "similarity" not in df.columns:
-        return None
-    df["score_diff"] = (df["similarity"] - score).abs()
-    return df.sort_values("score_diff").iloc[0]
+    raise ValueError("Unsupported file type. Upload TXT, PDF, or DOCX.")
 
 def render_skill_pills(skills, pill_class):
     if not skills:
-        st.write("None")
+        st.write("None found")
         return
+
     html = "".join([f'<span class="pill {pill_class}">{skill}</span>' for skill in skills])
     st.markdown(html, unsafe_allow_html=True)
 
 def get_match_label(score):
     if score >= 0.75:
-        return "Strong Match", SUCCESS
+        return "Strong Match"
     if score >= 0.45:
-        return "Moderate Match", WARNING
-    return "Low Match", DANGER
+        return "Moderate Match"
+    return "Low Match"
 
 def build_resume_rewrite_prompt(resume_text, job_text, score, matched_skills, missing_skills):
-    matched = ", ".join(matched_skills[:15]) if matched_skills else "None identified"
-    missing = ", ".join(missing_skills[:15]) if missing_skills else "None identified"
+    matched = ", ".join(matched_skills[:20]) if matched_skills else "None identified"
+    missing = ", ".join(missing_skills[:20]) if missing_skills else "None identified"
 
     return f"""
 You are an expert resume writer and career coach.
 
-Your job is to help improve resume content for a specific role.
-
-Rules:
-- Only use information already present in the resume.
-- Do not invent employers, job titles, tools, metrics, dates, achievements, or experiences.
-- Make bullet points stronger, clearer, and more aligned with the job.
-- Keep the tone professional and concise.
+Only use information already present in the resume.
+Do not invent employers, job titles, tools, metrics, dates, achievements, or experiences.
 
 Match Score: {round(score * 100, 2)}%
 Matched Skills: {matched}
@@ -337,18 +328,14 @@ Resume:
 Job Description:
 {job_text[:5000]}
 
-Return exactly these sections with markdown headings:
+Return exactly these sections:
 
 ## Overall Fit
 Write 2 concise sentences.
 
 ## Improved Resume Lines
-Write 5 improved bullet points.
-Each bullet must:
-- start with a strong action verb
-- be one line
-- stay truthful to the resume
-- reflect the job description where possible
+Write 5 improved bullet points tailored to the job.
+Each bullet must start with a strong action verb and stay truthful to the resume.
 
 ## Keywords To Add If Truthful
 List 8 keywords from the job description.
@@ -359,15 +346,16 @@ List the top 3 gaps between the resume and the role.
 
 def generate_ai_feedback(resume_text, job_text, score, matched_skills, missing_skills):
     client = get_groq_client()
+
     if client is None:
         return None
 
     prompt = build_resume_rewrite_prompt(
-        resume_text=resume_text,
-        job_text=job_text,
-        score=score,
-        matched_skills=matched_skills,
-        missing_skills=missing_skills
+        resume_text,
+        job_text,
+        score,
+        matched_skills,
+        missing_skills
     )
 
     try:
@@ -385,22 +373,14 @@ def generate_ai_feedback(resume_text, job_text, score, matched_skills, missing_s
             ],
             temperature=0.3
         )
+
         return response.choices[0].message.content
+
     except Exception as e:
+        error_text = str(e)
+        if "invalid_api_key" in error_text.lower() or "invalid api key" in error_text.lower():
+            return "Groq rejected the API key. Update your GROQ_API_KEY in Streamlit secrets and redeploy."
         return f"AI feedback could not be generated: {e}"
-
-# -------------------------
-# PREP DATA
-# -------------------------
-if "matched_skills" in training_df.columns:
-    training_df["matched_skills"] = training_df["matched_skills"].apply(safe_parse_list)
-else:
-    training_df["matched_skills"] = [[] for _ in range(len(training_df))]
-
-if "missing_skills" in training_df.columns:
-    training_df["missing_skills"] = training_df["missing_skills"].apply(safe_parse_list)
-else:
-    training_df["missing_skills"] = [[] for _ in range(len(training_df))]
 
 # -------------------------
 # HEADER
@@ -409,11 +389,9 @@ st.markdown(
     """
     <div class="hero-card">
         <h1 style="margin-bottom:0.4rem;">💼 AI Resume Matcher</h1>
-        <p style="margin:0; font-size:1.05rem;">
-            Match smarter. Apply better.
-        </p>
+        <p style="margin:0; font-size:1.05rem;">Match smarter. Apply better.</p>
         <p class="muted" style="margin-top:0.6rem;">
-            Upload a resume and a job description to get a match score, skill insights, and AI-tailored resume bullet rewrites.
+            Upload a resume and a job description to get a match score, personalized skill insights, and AI-tailored resume bullet rewrites.
         </p>
     </div>
     """,
@@ -421,7 +399,7 @@ st.markdown(
 )
 
 # -------------------------
-# INPUT SECTION
+# UPLOAD SECTION
 # -------------------------
 left, right = st.columns(2)
 
@@ -442,7 +420,7 @@ with right:
     )
 
 # -------------------------
-# MAIN ACTION
+# MAIN APP
 # -------------------------
 if resume_file and job_file:
     try:
@@ -462,21 +440,26 @@ if resume_file and job_file:
         st.stop()
 
     pred, score = predict_match(resume_text, job_text)
-    label, label_color = get_match_label(score)
+    label = get_match_label(score)
 
     resume_skills, job_skills, matched_skills, missing_skills = compare_uploaded_skills(
         resume_text,
         job_text
     )
+
     st.markdown('<div class="section-label">Match Results</div>', unsafe_allow_html=True)
+
     st.progress(min(max(score, 0.0), 1.0))
     st.caption(f"Overall match confidence: {round(score * 100, 2)}%")
 
     c1, c2, c3 = st.columns(3)
+
     with c1:
         st.metric("Match Score", f"{round(score * 100, 2)}%")
+
     with c2:
         st.metric("Prediction", label)
+
     with c3:
         st.metric("Matched Skills", f"{len(matched_skills)} / {len(job_skills)}")
 
@@ -485,26 +468,29 @@ if resume_file and job_file:
     with skill_col1:
         st.markdown('<div class="result-card">', unsafe_allow_html=True)
         st.subheader("✅ Matched Skills")
-        render_skill_pills(matched_skills[:15], "pill-match")
+        render_skill_pills(matched_skills[:25], "pill-match")
         st.markdown("</div>", unsafe_allow_html=True)
 
     with skill_col2:
         st.markdown('<div class="result-card">', unsafe_allow_html=True)
         st.subheader("❌ Missing Skills")
-        render_skill_pills(missing_skills[:15], "pill-missing")
+        render_skill_pills(missing_skills[:25], "pill-missing")
         st.markdown("</div>", unsafe_allow_html=True)
 
     st.markdown('<div class="result-card">', unsafe_allow_html=True)
     st.subheader("🧠 Quick Feedback")
+
     if score > 0.75:
         st.success("Strong alignment. This resume appears to fit the role well.")
     elif score > 0.45:
         st.warning("Decent alignment, but there is room to tailor the resume more directly to the job.")
     else:
         st.error("Lower alignment. The resume likely needs stronger tailoring for this position.")
+
     st.markdown("</div>", unsafe_allow_html=True)
 
     st.markdown('<div class="section-label">AI Resume Rewrite</div>', unsafe_allow_html=True)
+
     ai_col1, ai_col2 = st.columns([2, 1])
 
     with ai_col1:
@@ -520,18 +506,20 @@ if resume_file and job_file:
     if generate_clicked:
         with st.spinner("Generating tailored resume improvements..."):
             ai_output = generate_ai_feedback(
-                resume_text=resume_text,
-                job_text=job_text,
-                score=score,
-                matched_skills=matched_skills,
-                missing_skills=missing_skills
+                resume_text,
+                job_text,
+                score,
+                matched_skills,
+                missing_skills
             )
 
         st.markdown('<div class="result-card">', unsafe_allow_html=True)
+
         if ai_output:
             st.markdown(ai_output)
         else:
             st.info("Add a Groq API key in Streamlit secrets to enable AI-generated rewrites.")
+
         st.markdown("</div>", unsafe_allow_html=True)
 
     with st.expander("📄 View Uploaded Resume Text"):
@@ -545,8 +533,14 @@ else:
         """
         <div class="info-card">
             <h3 style="margin-top:0;">How to use</h3>
-            <p style="margin-bottom:0.45rem;">1. Upload your resume as TXT, PDF, or DOCX.</p>
-            <p style="margin-bottom:0.45rem;">2. Upload the job description as TXT, PDF, or DOCX.</p>
+            <p>1. Upload your resume as TXT, PDF, or DOCX.</p>
+            <p>2. Upload the job description as TXT, PDF, or DOCX.</p>
+            <p>3. Review your match score and personalized skill analysis.</p>
+            <p>4. Generate AI rewrite suggestions for stronger resume bullets.</p>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
             <p style="margin-bottom:0.45rem;">3. Review your match score and skills insights.</p>
             <p style="margin-bottom:0;">4. Generate AI rewrite suggestions for stronger resume bullets.</p>
         </div>
