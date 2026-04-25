@@ -464,10 +464,10 @@ if resume_file and job_file:
     pred, score = predict_match(resume_text, job_text)
     label, label_color = get_match_label(score)
 
-    closest = get_closest_training_example(score)
-    matched_skills = closest["matched_skills"] if closest is not None and "matched_skills" in closest else []
-    missing_skills = closest["missing_skills"] if closest is not None and "missing_skills" in closest else []
-
+resume_skills, job_skills, matched_skills, missing_skills = compare_uploaded_skills(
+    resume_text,
+    job_text
+)
     st.markdown('<div class="section-label">Match Results</div>', unsafe_allow_html=True)
     st.progress(min(max(score, 0.0), 1.0))
     st.caption(f"Overall match confidence: {round(score * 100, 2)}%")
