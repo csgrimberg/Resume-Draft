@@ -21,6 +21,13 @@ try:
 except ImportError:
     Document = None
 
+try:
+    from reportlab.lib.pagesizes import letter
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+    from reportlab.lib.styles import getSampleStyleSheet
+except ImportError:
+    SimpleDocTemplate = None
+
 # -------------------------
 # PAGE CONFIG
 # -------------------------
@@ -31,7 +38,7 @@ st.set_page_config(
 )
 
 # -------------------------
-# THEME COLORS
+# COLORS
 # -------------------------
 PRIMARY = "#FF2D2D"
 SECONDARY = "#B30000"
@@ -161,7 +168,7 @@ st.markdown(
 )
 
 # -------------------------
-# FILE PATHS
+# PATHS
 # -------------------------
 MODEL_PATH = "resume_job_matcher_model.pkl"
 TRAINING_PATH = "training_pairs_debug.csv"
@@ -239,13 +246,10 @@ def extract_skills_from_text(text, skills_list):
 
 def compare_uploaded_skills(resume_text, job_text):
     skills_list = load_skills()
-
     resume_skills = extract_skills_from_text(resume_text, skills_list)
     job_skills = extract_skills_from_text(job_text, skills_list)
-
     matched_skills = sorted(set(resume_skills).intersection(set(job_skills)))
     missing_skills = sorted(set(job_skills) - set(resume_skills))
-
     return resume_skills, job_skills, matched_skills, missing_skills
 
 def decode_text_bytes(raw):
@@ -382,6 +386,70 @@ def generate_ai_feedback(resume_text, job_text, score, matched_skills, missing_s
             return "Groq rejected the API key. Update your GROQ_API_KEY in Streamlit secrets and redeploy."
         return f"AI feedback could not be generated: {e}"
 
+def create_docx_download(ai_text, score, matched_skills, missing_skills):
+    doc = Document()
+    doc.add_heading("AI Resume Match Feedback", level=1)
+
+    doc.add_paragraph(f"Match Score: {round(score * 100, 2)}%")
+    doc.add_paragraph(f"Matched Skills: {', '.join(matched_skills) if matched_skills else 'None found'}")
+    doc.add_paragraph(f"Missing Skills: {', '.join(missing_skills) if missing_skills else 'None found'}")
+
+    doc.add_heading("AI Resume Rewrite Suggestions", level=2)
+
+    for line in ai_text.split("\n"):
+        clean_line = line.strip()
+
+        if not clean_line:
+            continue
+
+        if clean_line.startswith("## "):
+            doc.add_heading(clean_line.replace("## ", ""), level=2)
+        elif clean_line.startswith("- "):
+            doc.add_paragraph(clean_line.replace("- ", ""), style="List Bullet")
+        else:
+            doc.add_paragraph(clean_line)
+
+    buffer = io.BytesIO()
+    doc.save(buffer)
+    buffer.seek(0)
+    return buffer
+
+def create_pdf_download(ai_text, score, matched_skills, missing_skills):
+    if SimpleDocTemplate is None:
+        return None
+
+    buffer = io.BytesIO()
+    pdf = SimpleDocTemplate(buffer, pagesize=letter)
+    styles = getSampleStyleSheet()
+    story = []
+
+    story.append(Paragraph("AI Resume Match Feedback", styles["Title"]))
+    story.append(Spacer(1, 12))
+    story.append(Paragraph(f"Match Score: {round(score * 100, 2)}%", styles["Normal"]))
+    story.append(Paragraph(f"Matched Skills: {', '.join(matched_skills) if matched_skills else 'None found'}", styles["Normal"]))
+    story.append(Paragraph(f"Missing Skills: {', '.join(missing_skills) if missing_skills else 'None found'}", styles["Normal"]))
+    story.append(Spacer(1, 12))
+
+    for line in ai_text.split("\n"):
+        clean_line = line.strip()
+
+        if not clean_line:
+            story.append(Spacer(1, 8))
+            continue
+
+        clean_line = clean_line.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+        if clean_line.startswith("## "):
+            story.append(Paragraph(clean_line.replace("## ", ""), styles["Heading2"]))
+        elif clean_line.startswith("- "):
+            story.append(Paragraph("• " + clean_line.replace("- ", ""), styles["Normal"]))
+        else:
+            story.append(Paragraph(clean_line, styles["Normal"]))
+
+    pdf.build(story)
+    buffer.seek(0)
+    return buffer
+
 # -------------------------
 # HEADER
 # -------------------------
@@ -391,7 +459,7 @@ st.markdown(
         <h1 style="margin-bottom:0.4rem;">💼 AI Resume Matcher</h1>
         <p style="margin:0; font-size:1.05rem;">Match smarter. Apply better.</p>
         <p class="muted" style="margin-top:0.6rem;">
-            Upload a resume and a job description to get a match score, personalized skill insights, and AI-tailored resume bullet rewrites.
+            Upload a resume and a job description to get a match score, personalized skill insights, AI-tailored resume bullet rewrites, and downloadable feedback.
         </p>
     </div>
     """,
@@ -503,9 +571,12 @@ if resume_file and job_file:
             unsafe_allow_html=True
         )
 
+    if "ai_output" not in st.session_state:
+        st.session_state.ai_output = None
+
     if generate_clicked:
         with st.spinner("Generating tailored resume improvements..."):
-            ai_output = generate_ai_feedback(
+            st.session_state.ai_output = generate_ai_feedback(
                 resume_text,
                 job_text,
                 score,
@@ -513,14 +584,52 @@ if resume_file and job_file:
                 missing_skills
             )
 
+    if st.session_state.ai_output:
+        ai_output = st.session_state.ai_output
+
         st.markdown('<div class="result-card">', unsafe_allow_html=True)
-
-        if ai_output:
-            st.markdown(ai_output)
-        else:
-            st.info("Add a Groq API key in Streamlit secrets to enable AI-generated rewrites.")
-
+        st.markdown(ai_output)
         st.markdown("</div>", unsafe_allow_html=True)
+
+        st.markdown('<div class="section-label">Download Feedback</div>', unsafe_allow_html=True)
+
+        docx_file = create_docx_download(
+            ai_output,
+            score,
+            matched_skills,
+            missing_skills
+        )
+
+        download_col1, download_col2 = st.columns(2)
+
+        with download_col1:
+            st.download_button(
+                label="⬇️ Download Word Feedback",
+                data=docx_file,
+                file_name="ai_resume_feedback.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            )
+
+        with download_col2:
+            pdf_file = create_pdf_download(
+                ai_output,
+                score,
+                matched_skills,
+                missing_skills
+            )
+
+            if pdf_file:
+                st.download_button(
+                    label="⬇️ Download PDF Feedback",
+                    data=pdf_file,
+                    file_name="ai_resume_feedback.pdf",
+                    mime="application/pdf"
+                )
+            else:
+                st.info("PDF download requires reportlab in requirements.txt.")
+
+    elif generate_clicked and not st.session_state.ai_output:
+        st.info("Add a Groq API key in Streamlit secrets to enable AI-generated rewrites.")
 
     with st.expander("📄 View Uploaded Resume Text"):
         st.write(resume_text[:4000])
@@ -537,12 +646,7 @@ else:
             <p>2. Upload the job description as TXT, PDF, or DOCX.</p>
             <p>3. Review your match score and personalized skill analysis.</p>
             <p>4. Generate AI rewrite suggestions for stronger resume bullets.</p>
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
-            <p style="margin-bottom:0.45rem;">3. Review your match score and skills insights.</p>
-            <p style="margin-bottom:0;">4. Generate AI rewrite suggestions for stronger resume bullets.</p>
+            <p>5. Download your feedback as a Word document or PDF.</p>
         </div>
         """,
         unsafe_allow_html=True
