@@ -464,10 +464,10 @@ if resume_file and job_file:
     pred, score = predict_match(resume_text, job_text)
     label, label_color = get_match_label(score)
 
-resume_skills, job_skills, matched_skills, missing_skills = compare_uploaded_skills(
-    resume_text,
-    job_text
-)
+    resume_skills, job_skills, matched_skills, missing_skills = compare_uploaded_skills(
+        resume_text,
+        job_text
+    )
     st.markdown('<div class="section-label">Match Results</div>', unsafe_allow_html=True)
     st.progress(min(max(score, 0.0), 1.0))
     st.caption(f"Overall match confidence: {round(score * 100, 2)}%")
@@ -478,7 +478,7 @@ resume_skills, job_skills, matched_skills, missing_skills = compare_uploaded_ski
     with c2:
         st.metric("Prediction", label)
     with c3:
-        st.metric("Matched Skills Found", len(matched_skills))
+        st.metric("Matched Skills", f"{len(matched_skills)} / {len(job_skills)}")
 
     skill_col1, skill_col2 = st.columns(2)
 
