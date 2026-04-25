@@ -5,3 +5,4 @@ scikit-learn
 groq
 PyPDF2
 python-docx
+reportlab
